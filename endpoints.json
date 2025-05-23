@@ -12,7 +12,6 @@
     "13.70.78.128/28",
     "13.70.79.128/27",
     "13.74.111.192/27",
-    "13.77.53.176/28",
     "13.86.221.176/28",
     "13.89.174.240/28",
     "13.89.175.192/28",
@@ -172,7 +171,6 @@
     "swdin02-mscdn.azureedge.net",
     "time.windows.com",
     "tsfe.trafficshaping.dsp.mp.microsoft.com",
-    "wcpstatic.microsoft.com",
     "windowsphone.com"
   ]
 }
