@@ -18,33 +18,36 @@ jobs:
       DATADOG_API_KEY:     ${{ secrets.DATADOG_API_KEY }}     # Datadog (optional)
 
     steps:
+      #--------------------------------------------------------------
+      # 0) Checkout code with push permissions
+      #--------------------------------------------------------------
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0           # needed to compare against history
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       #--------------------------------------------------------------
-      # 1) Install prerequisites (jq + PowerShell)
+      # 1) Install prerequisites (jq + PowerShell if missing)
       #--------------------------------------------------------------
       - name: Install jq & PowerShell (if missing)
-        shell: bash
         run: |
           set -e
           sudo apt-get update -y
           sudo apt-get install -y jq
-
+          # Install PowerShell Core only if pwsh isn't present
           if ! command -v pwsh &>/dev/null; then
-            echo "[setup] pwsh not found – installing PowerShell Core via Microsoft repo"
+            echo "[setup] Installing PowerShell Core…"
             sudo apt-get install -y wget apt-transport-https software-properties-common
             wget -q https://packages.microsoft.com/config/ubuntu/22.04/packages-microsoft-prod.deb
             sudo dpkg -i packages-microsoft-prod.deb
             sudo apt-get update -y
             sudo apt-get install -y powershell
-          else
-            echo "[setup] pwsh already present – version: $(pwsh --version)"
           fi
 
       #--------------------------------------------------------------
       # 2) Generate latest endpoint list (ips + urls)
       #--------------------------------------------------------------
-      - name: Fetch Intune endpoints
+      - name: Generate endpoint list
         id: generate
         shell: pwsh
         run: |
@@ -64,39 +67,39 @@ jobs:
           $payload | ConvertTo-Json -Depth 5 | Set-Content endpoints.json -Encoding utf8
 
       #--------------------------------------------------------------
-      # 3) Detect changes versus HEAD
+      # 3) Detect changes vs HEAD (handles new file scenario)
       #--------------------------------------------------------------
       - name: Detect changes
         id: changes
-        shell: bash
         run: |
-          git fetch --depth=1 || true
-          if git diff --quiet -- endpoints.json; then
+          set -e
+          if ! git ls-files --error-unmatch endpoints.json >/dev/null 2>&1; then
+            echo "changed=yes" >> $GITHUB_OUTPUT
+          elif git diff --quiet HEAD -- endpoints.json; then
             echo "changed=no" >> $GITHUB_OUTPUT
           else
             echo "changed=yes" >> $GITHUB_OUTPUT
           fi
 
       #--------------------------------------------------------------
-      # 4) Commit & push new list for traceability
+      # 4) Commit & push when list changed
       #--------------------------------------------------------------
       - name: Commit updated list
         if: steps.changes.outputs.changed == 'yes'
-        shell: bash
         run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          set -e
+          git config --global user.name  "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add endpoints.json
-          git commit -m "chore(intune): update endpoints $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-          git push
+          git commit -m "chore(intune): update endpoints $(date -u +'%Y-%m-%dT%H:%M:%SZ')" || exit 0
+          git push origin HEAD:${GITHUB_REF#refs/heads/}
 
       #--------------------------------------------------------------
-      # 5) Capture a diff snippet (5‑line context)
+      # 5) Capture diff snippet (5‑line context)
       #--------------------------------------------------------------
       - name: Capture diff
         if: steps.changes.outputs.changed == 'yes'
         id: diff
-        shell: bash
         run: |
           echo "DIFF<<EOF" >> $GITHUB_ENV
           git show --pretty=medium --unified=5 --no-color HEAD >> $GITHUB_ENV
@@ -109,25 +112,23 @@ jobs:
         if: steps.changes.outputs.changed == 'yes'
         env:
           DIFF: ${{ env.DIFF }}
-          COMMIT_URL: "${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}"
-        shell: bash
+          COMMIT_URL: ${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}
         run: |
           set -e
-          post_to_slack() {
-            jq -n --arg text "ℹ️ *Intune Endpoint Update* (<${COMMIT_URL}|commit>)\n\`\`\`diff\n${DIFF}\n\`\`\`" '{text:$text}' |\
+          post_slack() {
+            jq -n --arg text "ℹ️ *Intune Endpoint Update* (<${COMMIT_URL}|commit>)\n\`\`\`diff\n${DIFF}\n\`\`\`" '{text:$text}' | \
               curl -sS -X POST -H 'Content-Type: application/json' --data @- "$SLACK_WEBHOOK_URL"
           }
-          post_to_discord() {
-            jq -n --arg content "**Intune Endpoint Update**\n${COMMIT_URL}\n\`\`\`diff\n${DIFF}\n\`\`\`" '{content:$content}' |\
+          post_discord() {
+            jq -n --arg content "**Intune Endpoint Update**\n${COMMIT_URL}\n\`\`\`diff\n${DIFF}\n\`\`\`" '{content:$content}' | \
               curl -sS -X POST -H 'Content-Type: application/json' --data @- "$DISCORD_WEBHOOK_URL"
           }
-          post_to_datadog() {
+          post_datadog() {
             curl -sS -X POST "https://api.datadoghq.com/api/v1/events" \
               -H "Content-Type: application/json" \
               -H "DD-API-KEY: $DATADOG_API_KEY" \
               -d "{\"title\":\"Intune endpoints changed\",\"text\":\"See commit: ${COMMIT_URL}\",\"alert_type\":\"info\",\"tags\":[\"intune\",\"endpoints\"]}"
           }
-
-          [ -n "$SLACK_WEBHOOK_URL" ]   && post_to_slack || echo "[notify] Slack webhook not configured – skipping"
-          [ -n "$DISCORD_WEBHOOK_URL" ] && post_to_discord || echo "[notify] Discord webhook not configured – skipping"
-          [ -n "$DATADOG_API_KEY" ]     && post_to_datadog || echo "[notify] Datadog API key not configured – skipping"
+          [ -n "$SLACK_WEBHOOK_URL" ]   && post_slack   || echo "[notify] Slack webhook not configured – skipping"
+          [ -n "$DISCORD_WEBHOOK_URL" ] && post_discord || echo "[notify] Discord webhook not configured – skipping"
+          [ -n "$DATADOG_API_KEY" ]     && post_datadog || echo "[notify] Datadog API key not configured – skipping"
