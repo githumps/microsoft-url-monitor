@@ -13,30 +13,25 @@ jobs:
   check-endpoints:
     runs-on: self-hosted
     env:
-      SLACK_WEBHOOK_URL:   ${{ secrets.SLACK_WEBHOOK_URL }}   # Slack Incoming Webhook (required)
-      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }} # Discord Incoming Webhook (optional)
-      DATADOG_API_KEY:     ${{ secrets.DATADOG_API_KEY }}     # Datadog (optional)
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+      DATADOG_API_KEY: ${{ secrets.DATADOG_API_KEY }}
 
     steps:
-      #--------------------------------------------------------------
-      # 0) Checkout code with push permissions
-      #--------------------------------------------------------------
+      # 0) Checkout repository
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0           # needed to compare against history
+          fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      #--------------------------------------------------------------
-      # 1) Install prerequisites (jq + PowerShell if missing)
-      #--------------------------------------------------------------
-      - name: Install jq & PowerShell (if missing)
+      # 1) Install jq and (if necessary) PowerShell Core
+      - name: Install jq & PowerShell
         run: |
           set -e
           sudo apt-get update -y
           sudo apt-get install -y jq
-          # Install PowerShell Core only if pwsh isn't present
           if ! command -v pwsh &>/dev/null; then
-            echo "[setup] Installing PowerShell Core…"
+            echo "Installing PowerShell Core…"
             sudo apt-get install -y wget apt-transport-https software-properties-common
             wget -q https://packages.microsoft.com/config/ubuntu/22.04/packages-microsoft-prod.deb
             sudo dpkg -i packages-microsoft-prod.deb
@@ -44,9 +39,7 @@ jobs:
             sudo apt-get install -y powershell
           fi
 
-      #--------------------------------------------------------------
-      # 2) Generate latest endpoint list (ips + urls)
-      #--------------------------------------------------------------
+      # 2) Generate current endpoint list
       - name: Generate endpoint list
         id: generate
         shell: pwsh
@@ -55,7 +48,6 @@ jobs:
           $json = Invoke-RestMethod -Uri ("https://endpoints.office.com/endpoints/WorldWide?ServiceAreas=MEM&clientrequestid=$([guid]::NewGuid())")
           $ips  = $json | Where-Object { $_.ServiceArea -eq 'MEM' -and $_.ips  } | Select-Object -ExpandProperty ips  -Unique
           $urls = $json | Where-Object { $_.ServiceArea -eq 'MEM' -and $_.urls } | Select-Object -ExpandProperty urls -Unique
-
           $payload = [pscustomobject]@{
             timestamp = (Get-Date).ToString('o')
             ip_count  = $ips.Count
@@ -63,37 +55,26 @@ jobs:
             ips       = $ips  | Sort-Object
             urls      = $urls | Sort-Object
           }
-
           $payload | ConvertTo-Json -Depth 5 | Set-Content endpoints.json -Encoding utf8
 
-      #--------------------------------------------------------------
-      # 3) Detect changes – *ignore timestamp* so only IP/URL changes alert
-      #--------------------------------------------------------------
-      - name: Detect changes (ignoring timestamp)
+      # 3) Detect meaningful changes (ignore timestamp line)
+      - name: Detect changes (ignore timestamp)
         id: changes
         run: |
           set -e
-          # Strip timestamp line from new file
-          grep -v '"timestamp"' endpoints.json > new_no_ts.json
-
-          # Extract previous version, if it exists, and strip timestamp
-          if git show HEAD:endpoints.json > prev_raw.json 2>/dev/null; then
-            grep -v '"timestamp"' prev_raw.json > prev_no_ts.json
+          grep -v '"timestamp"' endpoints.json > new.json
+          if git show HEAD:endpoints.json > old_raw.json 2>/dev/null; then
+            grep -v '"timestamp"' old_raw.json > old.json
           else
-            touch prev_no_ts.json
+            touch old.json
           fi
-
-          if cmp -s prev_no_ts.json new_no_ts.json; then
-            echo "No meaningful changes (IP/URL lists identical)"
+          if cmp -s old.json new.json; then
             echo "changed=no" >> $GITHUB_OUTPUT
           else
-            echo "Endpoint lists changed!"
             echo "changed=yes" >> $GITHUB_OUTPUT
           fi
 
-      #--------------------------------------------------------------
-      # 4) Commit & push when list changed
-      #--------------------------------------------------------------
+      # 4) Commit & push when changed
       - name: Commit updated list
         if: steps.changes.outputs.changed == 'yes'
         run: |
@@ -104,9 +85,7 @@ jobs:
           git commit -m "chore(intune): update endpoints $(date -u +'%Y-%m-%dT%H:%M:%SZ')" || exit 0
           git push origin HEAD:${GITHUB_REF#refs/heads/}
 
-      #--------------------------------------------------------------
-      # 5) Capture diff (full for Slack, trimmed for Discord)
-      #--------------------------------------------------------------
+      # 5) Capture diffs for notifications
       - name: Capture diff
         if: steps.changes.outputs.changed == 'yes'
         id: diff
@@ -124,15 +103,13 @@ jobs:
           echo "$DISCORD_DIFF" >> $GITHUB_ENV
           echo "EOF" >> $GITHUB_ENV
 
-      #--------------------------------------------------------------
-      # 6) Send notifications (Slack, Discord, Datadog)
-      #--------------------------------------------------------------
+      # 6) Send notifications
       - name: Send notifications
         if: steps.changes.outputs.changed == 'yes'
         env:
-          FULL_DIFF:   ${{ env.FULL_DIFF }}
-          DISCORD_DIFF:${{ env.DISCORD_DIFF }}
-          COMMIT_URL:  ${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}
+          FULL_DIFF: ${{ env.FULL_DIFF }}
+          DISCORD_DIFF: ${{ env.DISCORD_DIFF }}
+          COMMIT_URL: ${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}
         run: |
           set -e
           post_slack() {
@@ -149,6 +126,6 @@ jobs:
               -H "DD-API-KEY: $DATADOG_API_KEY" \
               -d "{\"title\":\"Intune endpoints changed\",\"text\":\"See commit: ${COMMIT_URL}\",\"alert_type\":\"info\",\"tags\":[\"intune\",\"endpoints\"]}"
           }
-          [ -n "$SLACK_WEBHOOK_URL" ]   && post_slack   || echo "[notify] Slack webhook not configured – skipping"
-          [ -n "$DISCORD_WEBHOOK_URL" ] && post_discord || echo "[notify] Discord webhook not configured – skipping"
-          [ -n "$DATADOG_API_KEY" ]     && post_datadog || echo "[notify] Datadog API key not configured – skipping"
+          [ -n "$SLACK_WEBHOOK_URL" ]   && post_slack   || echo "Slack not configured – skipping"
+          [ -n "$DISCORD_WEBHOOK_URL" ] && post_discord || echo "Discord not configured – skipping"
+          [ -n "$DATADOG_API_KEY" ]     && post_datadog || echo "Datadog not configured – skipping"
