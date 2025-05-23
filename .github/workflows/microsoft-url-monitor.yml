@@ -67,17 +67,27 @@ jobs:
           $payload | ConvertTo-Json -Depth 5 | Set-Content endpoints.json -Encoding utf8
 
       #--------------------------------------------------------------
-      # 3) Detect changes vs HEAD (handles new file scenario)
+      # 3) Detect changes – *ignore timestamp* so only IP/URL changes alert
       #--------------------------------------------------------------
-      - name: Detect changes
+      - name: Detect changes (ignoring timestamp)
         id: changes
         run: |
           set -e
-          if ! git ls-files --error-unmatch endpoints.json >/dev/null 2>&1; then
-            echo "changed=yes" >> $GITHUB_OUTPUT
-          elif git diff --quiet HEAD -- endpoints.json; then
+          # Strip timestamp line from new file
+          grep -v '"timestamp"' endpoints.json > new_no_ts.json
+
+          # Extract previous version, if it exists, and strip timestamp
+          if git show HEAD:endpoints.json > prev_raw.json 2>/dev/null; then
+            grep -v '"timestamp"' prev_raw.json > prev_no_ts.json
+          else
+            touch prev_no_ts.json
+          fi
+
+          if cmp -s prev_no_ts.json new_no_ts.json; then
+            echo "No meaningful changes (IP/URL lists identical)"
             echo "changed=no" >> $GITHUB_OUTPUT
           else
+            echo "Endpoint lists changed!"
             echo "changed=yes" >> $GITHUB_OUTPUT
           fi
 
@@ -95,14 +105,23 @@ jobs:
           git push origin HEAD:${GITHUB_REF#refs/heads/}
 
       #--------------------------------------------------------------
-      # 5) Capture diff snippet (5‑line context)
+      # 5) Capture diff (full for Slack, trimmed for Discord)
       #--------------------------------------------------------------
       - name: Capture diff
         if: steps.changes.outputs.changed == 'yes'
         id: diff
         run: |
-          echo "DIFF<<EOF" >> $GITHUB_ENV
-          git show --pretty=medium --unified=5 --no-color HEAD >> $GITHUB_ENV
+          set -e
+          FULL_DIFF=$(git show --pretty=medium --unified=5 --no-color HEAD)
+          DISCORD_DIFF=$(echo "$FULL_DIFF" | head -n 60)
+          if [ ${#DISCORD_DIFF} -gt 1800 ]; then
+            DISCORD_DIFF=$(git diff --shortstat HEAD~1 HEAD)
+          fi
+          echo "FULL_DIFF<<EOF" >> $GITHUB_ENV
+          echo "$FULL_DIFF" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+          echo "DISCORD_DIFF<<EOF" >> $GITHUB_ENV
+          echo "$DISCORD_DIFF" >> $GITHUB_ENV
           echo "EOF" >> $GITHUB_ENV
 
       #--------------------------------------------------------------
@@ -111,16 +130,17 @@ jobs:
       - name: Send notifications
         if: steps.changes.outputs.changed == 'yes'
         env:
-          DIFF: ${{ env.DIFF }}
-          COMMIT_URL: ${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}
+          FULL_DIFF:   ${{ env.FULL_DIFF }}
+          DISCORD_DIFF:${{ env.DISCORD_DIFF }}
+          COMMIT_URL:  ${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}
         run: |
           set -e
           post_slack() {
-            jq -n --arg text "ℹ️ *Intune Endpoint Update* (<${COMMIT_URL}|commit>)\n\`\`\`diff\n${DIFF}\n\`\`\`" '{text:$text}' | \
+            jq -n --arg text "ℹ️ *Intune Endpoint Update* (<${COMMIT_URL}|commit>)\n```diff\n${FULL_DIFF}\n```" '{text:$text}' | \
               curl -sS -X POST -H 'Content-Type: application/json' --data @- "$SLACK_WEBHOOK_URL"
           }
           post_discord() {
-            jq -n --arg content "**Intune Endpoint Update**\n${COMMIT_URL}\n\`\`\`diff\n${DIFF}\n\`\`\`" '{content:$content}' | \
+            jq -n --arg content "**Intune Endpoint Update**\n${COMMIT_URL}\n```diff\n${DISCORD_DIFF}\n```" '{content:$content}' | \
               curl -sS -X POST -H 'Content-Type: application/json' --data @- "$DISCORD_WEBHOOK_URL"
           }
           post_datadog() {
