@@ -1,19 +1,18 @@
 name: Monitor Intune Endpoint Lists
 
-# Triggers: manual (workflow_dispatch) and every day at 07:00 AM US‑Eastern (11:00 UTC)
 on:
   workflow_dispatch:
   schedule:
+    # Daily at 07:00 AM US‑Eastern (11:00 UTC)
     - cron: '0 11 * * *'
 
 permissions:
-  contents: write  # allow the workflow bot to push changed files
+  contents: write
 
 jobs:
   check-endpoints:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     env:
-      # ➡️  REQUIRED – Add these in **Settings → Secrets and variables → Actions**
       SLACK_WEBHOOK_URL:   ${{ secrets.SLACK_WEBHOOK_URL }}   # Slack Incoming Webhook (required)
       DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }} # Discord Incoming Webhook (optional)
       DATADOG_API_KEY:     ${{ secrets.DATADOG_API_KEY }}     # Datadog (optional)
@@ -21,26 +20,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install jq (JSON helper)
-        run: sudo apt-get update && sudo apt-get install -y jq
-
-      # ------------------------------------------------------------
-      # 1) Ensure PowerShell Core is available (Ubuntu runners usually have it, but local runners may not)
-      # ------------------------------------------------------------
-      - name: Ensure PowerShell
+      #--------------------------------------------------------------
+      # 1) Install prerequisites (jq + PowerShell)
+      #--------------------------------------------------------------
+      - name: Install jq & PowerShell
         run: |
-          if ! command -v pwsh &>/dev/null; then
-            echo "::notice ::Installing PowerShell 7..."
-            sudo apt-get update
-            sudo apt-get install -y powershell
-          else
-            echo "PowerShell version: $(pwsh --version)"
-          fi
+          sudo apt-get update
+          sudo apt-get install -y jq powershell
 
-      # ------------------------------------------------------------
-      # 2) Generate the latest Intune endpoint list (ips + urls)
-      # ------------------------------------------------------------
-      - name: Fetch Intune endpoints (PowerShell)
+      #--------------------------------------------------------------
+      # 2) Generate latest endpoint list (ips + urls)
+      #--------------------------------------------------------------
+      - name: Fetch Intune endpoints
+        id: generate
         shell: pwsh
         run: |
           $json = Invoke-RestMethod -Uri ("https://endpoints.office.com/endpoints/WorldWide?ServiceAreas=MEM&clientrequestid=$([guid]::NewGuid())")
@@ -57,23 +49,23 @@ jobs:
 
           $payload | ConvertTo-Json -Depth 5 | Set-Content endpoints.json -Encoding utf8
 
-      # ------------------------------------------------------------
-      # 3) Did the list change compared to HEAD?
-      # ------------------------------------------------------------
+      #--------------------------------------------------------------
+      # 3) Detect changes versus HEAD
+      #--------------------------------------------------------------
       - name: Detect changes
         id: changes
         run: |
-          git fetch origin ${{ github.ref_name }} --depth=1 || true
+          git fetch --depth=1 || true
           if git diff --quiet -- endpoints.json; then
-            echo "changed=no" >> "$GITHUB_OUTPUT"
+            echo "changed=no" >> $GITHUB_OUTPUT
           else
-            echo "changed=yes" >> "$GITHUB_OUTPUT"
+            echo "changed=yes" >> $GITHUB_OUTPUT
           fi
 
-      # ------------------------------------------------------------
-      # 4) Commit + push new list for traceability
-      # ------------------------------------------------------------
-      - name: Commit & push
+      #--------------------------------------------------------------
+      # 4) Commit & push new list for traceability
+      #--------------------------------------------------------------
+      - name: Commit updated list
         if: steps.changes.outputs.changed == 'yes'
         run: |
           git config user.name  "github-actions[bot]"
@@ -82,96 +74,41 @@ jobs:
           git commit -m "chore(intune): update endpoints $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
           git push
 
-      # ------------------------------------------------------------
-      # 5) Capture a diff snippet (5‑line context) after commit
-      # ------------------------------------------------------------
-      - name: Get diff text
+      #--------------------------------------------------------------
+      # 5) Capture a diff snippet (5‑line context)
+      #--------------------------------------------------------------
+      - name: Capture diff
         if: steps.changes.outputs.changed == 'yes'
         id: diff
         run: |
-          DIFF=$(git show --pretty=medium --unified=5 --no-color HEAD | sed -e 's/`/`/g')
-          echo "DIFF<<EOF" >> $GITHUB_ENV
-          echo "$DIFF" >> $GITHUB_ENV
-          echo "EOF"  >> $GITHUB_ENV
+          echo 'DIFF<<EOF' >> $GITHUB_ENV
+          git show --pretty=medium --unified=5 --no-color HEAD >> $GITHUB_ENV
+          echo 'EOF' >> $GITHUB_ENV
 
-      # ------------------------------------------------------------
-      # 6) Notify Slack, Discord, and (optionally) Datadog
-      # ------------------------------------------------------------
+      #--------------------------------------------------------------
+      # 6) Send notifications (Slack, Discord, Datadog)
+      #--------------------------------------------------------------
       - name: Send notifications
         if: steps.changes.outputs.changed == 'yes'
         env:
-          REPO:              ${{ github.repository }}
-          SERVER_URL:        ${{ github.server_url }}
-          COMMIT_SHA:        ${{ github.sha }}
+          DIFF: ${{ env.DIFF }}
+          COMMIT_URL: "${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}"
         run: |
-          COMMIT_URL="${SERVER_URL}/${REPO}/commit/${COMMIT_SHA}"
-
-          # ===============  Slack  ===============
-          if [ -n "$SLACK_WEBHOOK_URL" ]; then
-            jq -n --arg text "ℹ️ *Intune Endpoint Update* (<${COMMIT_URL}|commit>)
-\`\`\`diff
-${DIFF}
-\`\`\`" '{text:$text}' |
+          post_to_slack() {
+            jq -n --arg text "ℹ️ *Intune Endpoint Update* (<${COMMIT_URL}|commit>)\n\`\`\`diff\n${DIFF}\n\`\`\`" '{text:$text}' |
               curl -sS -X POST -H 'Content-Type: application/json' --data @- "$SLACK_WEBHOOK_URL"
-          fi
-
-          # ===============  Discord  ===============
-          if [ -n "$DISCORD_WEBHOOK_URL" ]; then
-            jq -n --arg content "**Intune Endpoint Update**
-${COMMIT_URL}
-\`\`\`diff
-${DIFF}
-\`\`\`" '{content:$content}' |
+          }
+          post_to_discord() {
+            jq -n --arg content "**Intune Endpoint Update**\n${COMMIT_URL}\n\`\`\`diff\n${DIFF}\n\`\`\`" '{content:$content}' |
               curl -sS -X POST -H 'Content-Type: application/json' --data @- "$DISCORD_WEBHOOK_URL"
-          fi
-
-          # ===============  Datadog  ===============
-          if [ -n "$DATADOG_API_KEY" ]; then
+          }
+          post_to_datadog() {
             curl -sS -X POST "https://api.datadoghq.com/api/v1/events" \
               -H "Content-Type: application/json" \
               -H "DD-API-KEY: $DATADOG_API_KEY" \
               -d "{\"title\":\"Intune endpoints changed\",\"text\":\"See commit: ${COMMIT_URL}\",\"alert_type\":\"info\",\"tags\":[\"intune\",\"endpoints\"]}"
-          fi
+          }
 
-      # ------------------------------------------------------------
-      # END
-      # ------------------------------------------------------------ --pretty=medium --unified=5 --no-color HEAD | sed -e 's/`/`/g')
-          echo "DIFF<<EOF" >> $GITHUB_ENV
-          echo "$DIFF" >> $GITHUB_ENV
-          echo "EOF"  >> $GITHUB_ENV
-
-      # ------------------------------------------------------------
-      # 5) Notify Slack, Discord, and (optionally) Datadog
-      # ------------------------------------------------------------
-      - name: Send notifications
-        if: steps.changes.outputs.changed == 'yes'
-        env:
-          REPO:              ${{ github.repository }}
-          SERVER_URL:        ${{ github.server_url }}
-          COMMIT_SHA:        ${{ github.sha }}
-        run: |
-          COMMIT_URL="${SERVER_URL}/${REPO}/commit/${COMMIT_SHA}"
-
-          # ===============  Slack  ===============
-          if [ -n "$SLACK_WEBHOOK_URL" ]; then
-            jq -n --arg text "ℹ️ *Intune Endpoint Update* (<${COMMIT_URL}|commit>)\n```diff\n${DIFF}\n```" '{text:$text}' |
-              curl -sS -X POST -H 'Content-Type: application/json' --data @- "$SLACK_WEBHOOK_URL"
-          fi
-
-          # ===============  Discord  ===============
-          if [ -n "$DISCORD_WEBHOOK_URL" ]; then
-            jq -n --arg content "**Intune Endpoint Update**\n${COMMIT_URL}\n```diff\n${DIFF}\n```" '{content:$content}' |
-              curl -sS -X POST -H 'Content-Type: application/json' --data @- "$DISCORD_WEBHOOK_URL"
-          fi
-
-          # ===============  Datadog  ===============
-          if [ -n "$DATADOG_API_KEY" ]; then
-            curl -sS -X POST "https://api.datadoghq.com/api/v1/events" \
-              -H "Content-Type: application/json" \
-              -H "DD-API-KEY: $DATADOG_API_KEY" \
-              -d "{\"title\":\"Intune endpoints changed\",\"text\":\"See commit: ${COMMIT_URL}\",\"alert_type\":\"info\",\"tags\":[\"intune\",\"endpoints\"]}"
-          fi
-
-      # ------------------------------------------------------------
-      # END
-      # ------------------------------------------------------------
+          [ -n "$SLACK_WEBHOOK_URL" ]   && post_to_slack
+          [ -n "$DISCORD_WEBHOOK_URL" ] && post_to_discord
+          [ -n "$DATADOG_API_KEY" ]     && post_to_datadog
