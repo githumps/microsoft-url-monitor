@@ -1,7 +1,7 @@
 {
-  "timestamp": "2025-05-23T16:21:46.5223803-04:00",
+  "timestamp": "2025-05-30T07:06:49.1571005-04:00",
   "ip_count": 81,
-  "url_count": 88,
+  "url_count": 87,
   "ips": [
     "104.208.197.64/27",
     "104.46.162.96/27",
@@ -89,7 +89,6 @@
     "*.delivery.mp.microsoft.com",
     "*.dl.delivery.mp.microsoft.com",
     "*.do.dsp.mp.microsoft.com",
-    "*.emdl.ws.microsoft.com",
     "*.gov.teams.microsoft.us",
     "*.itunes.apple.com",
     "*.manage.microsoft.com",
