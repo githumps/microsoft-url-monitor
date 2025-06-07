@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   check-endpoints:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     env:
       SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
       DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
