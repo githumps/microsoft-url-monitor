@@ -1,7 +1,7 @@
 {
-  "timestamp": "2025-05-30T07:06:49.1571005-04:00",
+  "timestamp": "2025-06-30T11:07:33.1271852+00:00",
   "ip_count": 81,
-  "url_count": 87,
+  "url_count": 85,
   "ips": [
     "104.208.197.64/27",
     "104.46.162.96/27",
@@ -87,7 +87,6 @@
   ],
   "urls": [
     "*.delivery.mp.microsoft.com",
-    "*.dl.delivery.mp.microsoft.com",
     "*.do.dsp.mp.microsoft.com",
     "*.gov.teams.microsoft.us",
     "*.itunes.apple.com",
@@ -96,7 +95,6 @@
     "*.mzstatic.com",
     "*.notify.windows.com",
     "*.phobos.apple.com",
-    "*.prod.do.dsp.mp.microsoft.com",
     "*.s-microsoft.com",
     "*.support.services.microsoft.com",
     "*.trouter.communication.microsoft.com",
