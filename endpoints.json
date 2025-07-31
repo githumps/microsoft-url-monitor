@@ -1,7 +1,7 @@
 {
-  "timestamp": "2025-06-30T11:07:33.1271852+00:00",
+  "timestamp": "2025-07-31T11:07:38.1144905+00:00",
   "ip_count": 81,
-  "url_count": 85,
+  "url_count": 87,
   "ips": [
     "104.208.197.64/27",
     "104.46.162.96/27",
@@ -86,7 +86,7 @@
     "74.242.35.0/25"
   ],
   "urls": [
-    "*.delivery.mp.microsoft.com",
+    "*.dl.delivery.mp.microsoft.com",
     "*.do.dsp.mp.microsoft.com",
     "*.gov.teams.microsoft.us",
     "*.itunes.apple.com",
@@ -104,6 +104,7 @@
     "*.webpubsub.azure.com",
     "*.windowsupdate.com",
     "*.wns.windows.com",
+    "2.dl.delivery.mp.microsoft.com",
     "5-courier.push.apple.com",
     "adl.windows.com",
     "api.flightproxy.skype.com",
@@ -117,6 +118,7 @@
     "contentauthassetscdn-prodeur.azureedge.net",
     "contentauthrafcontentcdn-prod.azureedge.net",
     "contentauthrafcontentcdn-prodeur.azureedge.net",
+    "dl.delivery.mp.microsoft.com",
     "ecs.communication.microsoft.com",
     "edge.microsoft.com",
     "edge.skype.com",
